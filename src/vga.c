@@ -7,6 +7,21 @@
  * CLK_INH (BLANKING) : PA0 | PB4
  */
 
+/* Theory of operation
+ * We will allow the user to provide up to 64 "tiles" per "scene"
+ * A tile is 16px wide and 16px tall. Because there are 3 colors this takes 96 Bytes/tile
+ * 64 * 96 = 6144 Bytes to store all the tiles. They will likely be stored in the data segment
+ *
+ * The screen is therefore 25 * 19 tiles. The bottom third of the bottom tile will get cut off.
+ * We'll need to store one byte per tile space to be able to recall what tile to use for the space.
+ * 25 * 19 = 475 Bytes to store the background data. This will likely be stored in RAM.
+ *
+ * This is great for static images, but we'll need a way to have sprites on the screen.
+ * We'll also need a way to offset tiles so that the background can move.
+ *
+ * Let's have two line buffers, and fill them during the horizontal blanking time.
+ */
+
 void setup_vga_GPIO(){
     /* PINOUT
      * TIM2_OC1 : PA0  - AF2
@@ -17,8 +32,8 @@ void setup_vga_GPIO(){
      * TIM3_OC3 : PB0  - AF1
      * RED SHFT : PB1  - OUT
      * BLU SHFT : PB2  - OUT
-     * GRN SHFT :
-     * LD DATA  : PA12 - IN (*** NEEDS VOLTAGE DIVIDER ***)
+     * GRN SHFT : PB3  - OUT
+     * LD DATA  : PA12 - IN
      * DATA OUT : PC0 - PC16 - OUT
      */
     RCC -> APB2ENR |= RCC_APB2ENR_SYSCFGCOMPEN;
@@ -50,9 +65,13 @@ void setup_vga_GPIO(){
     GPIOB -> MODER |= GPIO_MODER_MODER3_0;
     GPIOB -> OSPEEDR |= GPIO_OSPEEDR_OSPEEDR3_0;
 
+    // This is a debugging pin to ensure timing is okay.
+    GPIOB -> MODER |= GPIO_MODER_MODER10_0;
+    GPIOB -> OSPEEDR |= GPIO_OSPEEDR_OSPEEDR10_0;
+
     // No need to specify EXTI or Input mode since A/Input are default
     EXTI -> RTSR |= EXTI_RTSR_TR12;
-    EXTI -> IMR |= EXTI_IMR_MR12;
+    EXTI -> EMR |= EXTI_EMR_MR12;
 }
 
 void setup_vga_timers(){
@@ -87,8 +106,10 @@ void setup_vga_timers(){
     TIM2 -> CCR2 = 824;
     TIM2 -> CCR3 = 896;
 
-    TIM2 -> DIER |= TIM_DIER_CC1IE;
+    TIM2 -> DIER |= TIM_DIER_CC3IE; // Generate interrupt on start of back porch
     NVIC -> ISER[0] = 1 << TIM2_IRQn;
+    NVIC_SetPriority(TIM2_IRQn,1); // It needs to have a lower priority than TIM3
+
 
     TIM3 -> CR1 &= ~TIM_CR1_CEN;
     TIM3 -> SMCR |= TIM_SMCR_TS_0; // TIM2 is the external clock
@@ -110,23 +131,112 @@ void setup_vga_timers(){
 
     TIM3 -> DIER |= TIM_DIER_CC1IE;
     NVIC -> ISER[0] = 1 << TIM3_IRQn;
+}
 
+void start_timers(){
     TIM3 -> CR1 = TIM_CR1_CEN;
     TIM2 -> CR1 = TIM_CR1_CEN;
 }
 
-extern uint16_t image[];
-uint16_t currX = 0;
-uint16_t currY = 0;
+extern uint16_t tiles[]; // TODO: Create script to generate tiles!
+extern uint16_t background[]; // TODO: Create script to generate this!
+
+//uint16_t lineBuffer[75] = {0};
+/*uint16_t lineBuffer[75] = {
+        0xffff, 0x0000, 0x0000, // 1
+        0x0000, 0xffff, 0x0000, // 2
+        0x0000, 0x0000, 0xffff, // 3
+        0xffff, 0x0000, 0xffff, // 4
+        0xffff, 0xffff, 0x0000, // 5
+        0x0000, 0xffff, 0xffff, // 6
+        0xffff, 0xffff, 0xffff, // 7
+        0x0000, 0x0000, 0x0000, // 8
+        0xaaaa, 0x5555, 0x0000, // 9
+        0x0000, 0xaaaa, 0x5555, // 10
+        0x5555, 0x0000, 0xaaaa, // 11
+        0x7777, 0xeeee, 0x0000, // 12
+        0x0000, 0x7777, 0xeeee, // 13
+        0xeeee, 0x0000, 0x7777, // 14
+        0x137f, 0x0000, 0x0000, // 15
+        0x0000, 0x137f, 0x0000, // 16
+        0x0000, 0x0000, 0x137f, // 17
+        0xec80, 0x137f, 0x0000, // 18
+        0x0000, 0xec80, 0x137f, // 19
+        0x137f, 0x0000, 0xec80, // 20
+        0xffff, 0x0000, 0x0000, // 21
+        0x0000, 0xffff, 0x0000, // 22
+        0x0000, 0x0000, 0xffff, // 23
+        0xffff, 0xffff, 0xffff, // 24
+        0x0001, 0x0001, 0x0001  // 25
+};*/
+uint16_t lineBuffer[75] = {
+        0xffff, 0x0000, 0x0000, // Red
+        0x0000, 0xffff, 0x0000, // Green
+        0x0000, 0x0000, 0xffff, // Blue
+        0xffff, 0xffff, 0x0000, // Yellow
+        0x0000, 0xffff, 0xffff, // Cyan
+        0xffff, 0x0000, 0xffff, // Magenta
+        0xffff, 0xffff, 0xffff, // White
+        0x0000, 0x0000, 0x0000, // Black
+        0xffff, 0x0000, 0x0000, // Red
+        0x0000, 0xffff, 0x0000, // Green
+        0x0000, 0x0000, 0xffff, // Blue
+        0xffff, 0xffff, 0x0000, // Yellow
+        0x0000, 0xffff, 0xffff, // Cyan
+        0xffff, 0x0000, 0xffff, // Magenta
+        0xffff, 0xffff, 0xffff, // White
+        0x0000, 0x0000, 0x0000, // Black
+        0xffff, 0x0000, 0x0000, // ...
+        0x0000, 0xffff, 0x0000,
+        0x0000, 0x0000, 0xffff,
+        0xffff, 0xffff, 0x0000,
+        0x0000, 0xffff, 0xffff,
+        0xffff, 0x0000, 0xffff,
+        0xffff, 0xffff, 0xffff,
+        0x0000, 0x0000, 0x0000,
+        0x9696, 0x5a5a, 0x2e2e
+};
+uint16_t lineBuffer2[75] = {
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+        0xffff, 0x0000, 0x0000,
+};
+
+extern void sendBuffers(uint16_t* linebuf, GPIO_TypeDef* gpiob, GPIO_TypeDef* gpioc);
+uint8_t it = 0;
 
 void TIM2_IRQHandler(){
-    // This interrupt will get triggered at the end of each line.
-    // Specifically, as soon as the horizontal blanking period starts.
-    // It must complete in < 448 clock cycles
-    TIM2 -> SR &= ~TIM_SR_CC1IF;
-    currX = 0;
-    //if(++currY % 2 == 1)
-    //    currX = 0;
+    // TODO: Trigger this interrupt later..
+    TIM2 -> SR &= ~TIM_SR_CC3IF;
+    if(it < 2){
+        sendBuffers(lineBuffer, GPIOB, GPIOC);
+    } else {
+        sendBuffers(lineBuffer, GPIOB, GPIOC);
+    }
+    it++;
+    it %= 4;
 }
 
 void TIM3_IRQHandler(){
@@ -135,79 +245,12 @@ void TIM3_IRQHandler(){
     // 2048 clock cycles per line. 25 lines in blanking area.
     // It must complete in < 51,200 clock cycles... We can do a ton of stuff here.
     TIM3 -> SR &= ~TIM_SR_CC1IF;
-    currY = 0;
-    currX = 0;
-}
-
-
-void EXTI4_15_IRQHandler(){
-    // This interrupt should get called every 16 Pixel clocks.
-    // It signifies that it's time to put data in the FIFOs again.
-    // It must complete in < 64 clock cycles
-    EXTI -> PR |= EXTI_PR_PR12;
-    // TODO: Convert this to assembly
-    // TODO: Create python script to convert image to 400x300px 16R16G16B format
-    // TODO: and store it in the flash memory. Access it here and maybe print to screen?
-    // This currently only prints lines...
-    /*// RED
-    GPIOC -> ODR = 0x0267;
-    GPIOB -> BSRR = GPIO_BSRR_BS_1;
-    GPIOB -> BSRR = GPIO_BSRR_BR_1;
-    // GREEN
-    GPIOC -> ODR = 0x0267;
-    GPIOB -> BSRR = GPIO_BSRR_BS_2;
-    GPIOB -> BSRR = GPIO_BSRR_BR_2;
-    // BLUE
-    //GPIOC -> ODR = 0xaaaa;
-    GPIOC -> ODR = 0x0267;
-    GPIOB -> BSRR = GPIO_BSRR_BS_3;
-    GPIOB -> BSRR = GPIO_BSRR_BR_3;
-    */
-    // Let's try an image...
-    // TODO: This isn't running fast enough. Write in assembly.
-    // TODO: Time this and see if it runs fast enough...
-    // NOTE: According to ARM, it will take 16 CPU Cycles before the first instruction in this ISR can be run...
-    asm volatile(
-            "LDR r2, =0x2\n"
-            "LDR r3, =0x20000\n"
-
-            "LDRH r5, [%1, %0]\n"
-            "STRH r5, [%2]\n"
-            "STRH r2, [%3]\n"
-            "ADD %0, #16\n"
-            "LSL r2, #1\n"
-            "STRH r3, [%3]\n"
-            "LSL r3, #1\n"
-
-            "LDRH r5, [%1, %0]\n"
-            "STRH r5, [%2]\n"
-            "STRH r2, [%3]\n"
-            "ADD %0, #16\n"
-            "LSL r2, #1\n"
-            "STRH r3, [%3]\n"
-            "LSL r3, #1\n"
-
-            "LDRH r5, [%1, %0]\n"
-            "STRH r5, [%2]\n"
-            "STRH r2, [%3]\n"
-            "ADD %0, #16\n"
-            "STRH r3, [%3]\n"
-
-            : "+l"(currX) : "r"(image), "r"(GPIOC -> ODR), "r"(GPIOB -> BSRR): "r2", "r3", "r5", "cc");
-    //GPIOC -> ODR = image[currX++];
-    //GPIOB -> BSRR = GPIO_BSRR_BS_1;
-    //GPIOB -> BSRR = GPIO_BSRR_BR_1;
-    //GPIOC -> ODR = image[currX++];
-    //GPIOB -> BSRR = GPIO_BSRR_BS_2;
-    //GPIOB -> BSRR = GPIO_BSRR_BR_2;
-    //GPIOC -> ODR = image[currX++];
-    //GPIOB -> BSRR = GPIO_BSRR_BS_3;
-    //GPIOB -> BSRR = GPIO_BSRR_BR_3;
+    it = 0;
 }
 
 
 void setup_vga(){
     setup_vga_GPIO();
     setup_vga_timers();
-    NVIC -> ISER[0] = 1 << EXTI4_15_IRQn;
+    start_timers();
 }

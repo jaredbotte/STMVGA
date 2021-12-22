@@ -14,6 +14,9 @@
 #include "vga.h"
 
 #define CLOCK_FREQ 72000000
+#define WIDTH 400
+#define HEIGHT 300
+
 
 /* MASTER PINOUT
  * These are all the pins currently being used and what they are being used for.
