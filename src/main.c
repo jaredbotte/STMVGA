@@ -33,6 +33,7 @@
  * PB3  - BLU SI   - BLUE FIFO Shift In Data
  * PB4  - TIM3_OC1 - V. Blanking (Clock Inhibit)
  * PB5  - TIM3_OC2 - V. Sync Start
+ * PB9  - INIT_LD  - Initial data load (for first tile)
  * PC0  |
  * ...  } - VIDEO DATA TO FIFOs
  * PC15 |

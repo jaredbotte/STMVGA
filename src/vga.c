@@ -9,17 +9,22 @@
 
 /* Theory of operation
  * We will allow the user to provide up to 64 "tiles" per "scene"
- * A tile is 16px wide and 16px tall. Because there are 3 colors this takes 96 Bytes/tile
- * 64 * 96 = 6144 Bytes to store all the tiles. They will likely be stored in the data segment
+ * (Theoretically we could have 256, but we may run out of memory before then)
+ * A tile is 16px wide and 16px tall. We'll allow 4 colors/tile. This will take 64 Bytes to store.
+ * 64 * 64 = 4096 Bytes to store all the tiles. They will likely be stored in the data segment (flash memory)
+ * 64 * 256 = 16,384 Bytes to store all tiles. There is a possibility that this will fit in flash memory.
  *
- * The screen is therefore 25 * 19 tiles. The bottom third of the bottom tile will get cut off.
+ * The screen is therefore 25 * ~19 tiles. The bottom quarter of the bottom tile will get cut off.
+ * There's a chance that I will make the screen 25 * 18 tiles and use the top as a status bar of sorts.
  * We'll need to store one byte per tile space to be able to recall what tile to use for the space.
- * 25 * 19 = 475 Bytes to store the background data. This will likely be stored in RAM.
+ * 25 * 19 = 475 Bytes to store the background data. This will be stored in RAM because scrolling backgrounds will make this change.
  *
  * This is great for static images, but we'll need a way to have sprites on the screen.
- * We'll also need a way to offset tiles so that the background can move.
+ * We'll also need a way to offset tiles so that the background can scroll.
  *
  * Let's have two line buffers, and fill them during the horizontal blanking time.
+ * This will be a challenge, but we can likely do this during nops.
+ * Also, we have two lines to generate the next buffer since we're sending each horizontal line twice.
  */
 
 void setup_vga_GPIO(){
@@ -64,6 +69,9 @@ void setup_vga_GPIO(){
     GPIOB -> OSPEEDR |= GPIO_OSPEEDR_OSPEEDR2_0;
     GPIOB -> MODER |= GPIO_MODER_MODER3_0;
     GPIOB -> OSPEEDR |= GPIO_OSPEEDR_OSPEEDR3_0;
+    GPIOB -> MODER |= GPIO_MODER_MODER9_0;
+    GPIOB -> OSPEEDR |= GPIO_OSPEEDR_OSPEEDR9_0;
+    GPIOB -> BSRR |= GPIO_BSRR_BS_9;
 
     // This is a debugging pin to ensure timing is okay.
     GPIOB -> MODER |= GPIO_MODER_MODER10_0;
@@ -139,38 +147,16 @@ void start_timers(){
 }
 
 extern uint16_t tiles[]; // TODO: Create script to generate tiles!
-extern uint16_t background[]; // TODO: Create script to generate this!
+extern uint32_t  palettes[]; // TODO: Create script to generate palettes!
+extern uint8_t background[]; // TODO: Create script to generate this!
+extern uint8_t attributes[]; // TODO: Create script to generate attributes!
+extern uint16_t lineBufferA[];
+extern uint16_t lineBufferB[];
+extern uint16_t xpos;
+extern uint16_t ypos;
 
-//uint16_t lineBuffer[75] = {0};
 /*uint16_t lineBuffer[75] = {
-        0xffff, 0x0000, 0x0000, // 1
-        0x0000, 0xffff, 0x0000, // 2
-        0x0000, 0x0000, 0xffff, // 3
-        0xffff, 0x0000, 0xffff, // 4
-        0xffff, 0xffff, 0x0000, // 5
-        0x0000, 0xffff, 0xffff, // 6
-        0xffff, 0xffff, 0xffff, // 7
-        0x0000, 0x0000, 0x0000, // 8
-        0xaaaa, 0x5555, 0x0000, // 9
-        0x0000, 0xaaaa, 0x5555, // 10
-        0x5555, 0x0000, 0xaaaa, // 11
-        0x7777, 0xeeee, 0x0000, // 12
-        0x0000, 0x7777, 0xeeee, // 13
-        0xeeee, 0x0000, 0x7777, // 14
-        0x137f, 0x0000, 0x0000, // 15
-        0x0000, 0x137f, 0x0000, // 16
-        0x0000, 0x0000, 0x137f, // 17
-        0xec80, 0x137f, 0x0000, // 18
-        0x0000, 0xec80, 0x137f, // 19
-        0x137f, 0x0000, 0xec80, // 20
-        0xffff, 0x0000, 0x0000, // 21
-        0x0000, 0xffff, 0x0000, // 22
-        0x0000, 0x0000, 0xffff, // 23
-        0xffff, 0xffff, 0xffff, // 24
-        0x0001, 0x0001, 0x0001  // 25
-};*/
-uint16_t lineBuffer[75] = {
-        0xffff, 0x0000, 0x0000, // Red
+        //0x0000, 0xffff, 0x0000,
         0x0000, 0xffff, 0x0000, // Green
         0x0000, 0x0000, 0xffff, // Blue
         0xffff, 0xffff, 0x0000, // Yellow
@@ -194,63 +180,58 @@ uint16_t lineBuffer[75] = {
         0xffff, 0x0000, 0xffff,
         0xffff, 0xffff, 0xffff,
         0x0000, 0x0000, 0x0000,
-        0x9696, 0x5a5a, 0x2e2e
-};
-uint16_t lineBuffer2[75] = {
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-        0xffff, 0x0000, 0x0000,
-};
+        0x9696, 0x5a5a, 0x2e2e,
+        0xffff, 0x0000, 0x0000 // Red
+};*/
 
-extern void sendBuffers(uint16_t* linebuf, GPIO_TypeDef* gpiob, GPIO_TypeDef* gpioc);
+extern void sendBuffers(uint16_t* linebuf, uint16_t* nextlinebuf);
+extern void generateFirstLine();
 uint8_t it = 0;
 
 void TIM2_IRQHandler(){
     // TODO: Trigger this interrupt later..
     TIM2 -> SR &= ~TIM_SR_CC3IF;
-    if(it < 2){
-        sendBuffers(lineBuffer, GPIOB, GPIOC);
-    } else {
-        sendBuffers(lineBuffer, GPIOB, GPIOC);
+    switch(it){
+        case 0:
+            sendBuffers(lineBufferA, lineBufferB);
+            it++;
+            break;
+        case 1:
+            sendBuffers(lineBufferA, lineBufferB);
+            ypos++;
+            it++;
+            break;
+        case 2:
+            sendBuffers(lineBufferB, lineBufferA);
+            it++;
+            break;
+        case 3:
+            sendBuffers(lineBufferB, lineBufferA);
+            it = 0;
+            ypos++;
+            break;
     }
-    it++;
-    it %= 4;
+    if (ypos != 15) {
+        xpos -= 25;
+    } else {
+        ypos = 0;
+    }
 }
 
 void TIM3_IRQHandler(){
     // This interrupt will get triggered at the end of each screen.
     // Specifically, as soon as the vertical blanking period starts
     // 2048 clock cycles per line. 25 lines in blanking area.
-    // It must complete in < 51,200 clock cycles... We can do a ton of stuff here.
+    // It must complete in < 51,200 clock cycles... We can do a lot of stuff here.
     TIM3 -> SR &= ~TIM_SR_CC1IF;
     it = 0;
+    xpos = 0;
 }
 
 
 void setup_vga(){
     setup_vga_GPIO();
     setup_vga_timers();
+    generateFirstLine();
     start_timers();
 }

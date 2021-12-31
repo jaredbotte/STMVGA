@@ -7,6 +7,7 @@ S_SRCS += \
 ../src/sendBuffers.s 
 
 C_SRCS += \
+../src/gameData.c \
 ../src/main.c \
 ../src/music.c \
 ../src/setup.c \
@@ -15,6 +16,7 @@ C_SRCS += \
 ../src/vga.c 
 
 OBJS += \
+./src/gameData.o \
 ./src/main.o \
 ./src/music.o \
 ./src/sendBuffers.o \
@@ -24,6 +26,7 @@ OBJS += \
 ./src/vga.o 
 
 C_DEPS += \
+./src/gameData.d \
 ./src/main.d \
 ./src/music.d \
 ./src/setup.d \
