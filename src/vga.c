@@ -154,9 +154,12 @@ extern uint16_t lineBufferA[];
 extern uint16_t lineBufferB[];
 extern uint16_t xpos;
 extern uint16_t ypos;
+extern uint16_t mappos;
 
-/*uint16_t lineBuffer[75] = {
-        //0x0000, 0xffff, 0x0000,
+uint16_t lineBufferC[75] = {0};
+
+uint16_t lineBuffer[75] = {
+        0xffff, 0x0000, 0x0000, // Red
         0x0000, 0xffff, 0x0000, // Green
         0x0000, 0x0000, 0xffff, // Blue
         0xffff, 0xffff, 0x0000, // Yellow
@@ -181,8 +184,8 @@ extern uint16_t ypos;
         0xffff, 0xffff, 0xffff,
         0x0000, 0x0000, 0x0000,
         0x9696, 0x5a5a, 0x2e2e,
-        0xffff, 0x0000, 0x0000 // Red
-};*/
+        //0xffff, 0x0000, 0x0000 // Red
+};
 
 extern void sendBuffers(uint16_t* linebuf, uint16_t* nextlinebuf);
 extern void generateFirstLine();
@@ -193,29 +196,44 @@ void TIM2_IRQHandler(){
     TIM2 -> SR &= ~TIM_SR_CC3IF;
     switch(it){
         case 0:
+            xpos = 0;
             sendBuffers(lineBufferA, lineBufferB);
             it++;
             break;
         case 1:
             sendBuffers(lineBufferA, lineBufferB);
-            ypos++;
             it++;
             break;
         case 2:
-            sendBuffers(lineBufferB, lineBufferA);
+            sendBuffers(lineBufferA, lineBufferB);
+            mappos = 0;
+            ypos++;
             it++;
             break;
         case 3:
+            xpos = 0;
+            sendBuffers(lineBufferB, lineBufferA);
+            it++;
+            break;
+        case 4:
+            sendBuffers(lineBufferB, lineBufferA);
+            it++;
+            break;
+        case 5:
             sendBuffers(lineBufferB, lineBufferA);
             it = 0;
-            ypos++;
+            mappos = 0; // In reality, this may need to increment to start producing the next line.
+            if(ypos == 15){
+                ypos = 0;
+            } else {
+                ypos++;
+            }
             break;
     }
-    if (ypos != 15) {
-        xpos -= 25;
-    } else {
-        ypos = 0;
-    }
+    /* Problems:
+     *      * Everything is using the first value in the background/attribute map...
+     *      * We only seem to have 7 tiles vertically? Should see 12.5
+     */
 }
 
 void TIM3_IRQHandler(){
@@ -226,6 +244,7 @@ void TIM3_IRQHandler(){
     TIM3 -> SR &= ~TIM_SR_CC1IF;
     it = 0;
     xpos = 0;
+    ypos = 0;
 }
 
 
@@ -233,5 +252,6 @@ void setup_vga(){
     setup_vga_GPIO();
     setup_vga_timers();
     generateFirstLine();
+    mappos = 0;
     start_timers();
 }
